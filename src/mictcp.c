@@ -127,15 +127,26 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
  */
 int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
 {
+    int nb_octets_lus;
+    mic_tcp_payload payload; // creation contenu de pdu
+    payload.data = mesg;
+    payload.size = max_mesg_size;
+  
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-    if(mysock.fd == socket){ // Si le socket a bien été créé correctement
-        mic_tcp_payload payload;
-        payload.data = mesg;
-        payload.size = max_mesg_size;
-        
-        app_buffer_get(payload);
-        
-        process_received_PDU(addr_sock_dest);
+    if(mysock.fd == socket && mysock.state == ESTABLISHED){ // Si le socket a bien été créé correctement et que le sock est en état connecté
+
+      /* Attente d'un PDU */
+      mysock.state = WAIT_FOR_PDU;
+
+      /* Recuperation d'un PDU dans le buffer de reception */
+      nb_octets_lus = app_buffer_get(payload);
+
+      mysock.state = ESTABLISHED;
+      return nb_octets_lus;  
+    }
+
+    else{
+      return -1;
     }
 }
 
@@ -160,5 +171,8 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     // V1 pas de mise à jour des numéros de séquence et d'acquittement
+    
     app_buffer_put(pdu.payload); // insertion des données utiles dans le buffer de réception du socket
+
+    mysock.state = ESTABLISHED;
 }
