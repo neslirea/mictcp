@@ -4,6 +4,7 @@
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
+ 
  */
 int mic_tcp_socket(start_mode sm)
 {
