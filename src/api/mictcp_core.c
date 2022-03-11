@@ -46,7 +46,7 @@ int initialize_components(start_mode mode)
         pthread_cond_init(&buffer_empty_cond, 0);
         memset((char *) &local_addr, 0, sizeof(local_addr));
         local_addr.sin_family = AF_INET;
-        local_addr.sin_port = htons(API_CS_Port);
+        local_addr.sin_port = htons(API_CS_Port); // checker include pour + d'infos
         local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
         bnd = bind(sys_socket, (struct sockaddr *) &local_addr, sizeof(local_addr));
 
@@ -58,7 +58,7 @@ int initialize_components(start_mode mode)
         {
             memset((char *) &remote_addr, 0, sizeof(remote_addr));
             remote_addr.sin_family = AF_INET;
-            remote_addr.sin_port = htons(API_SC_Port);
+            remote_addr.sin_port = htons(API_SC_Port); // API_SC_PORT --> 
             hp = gethostbyname("localhost");
             memcpy (&(remote_addr.sin_addr.s_addr), hp->h_addr, hp->h_length);
             initialized = 1;

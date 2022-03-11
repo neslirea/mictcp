@@ -1,28 +1,51 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 
+/* Variables globales */
+mic_tcp_sock mysock;
+mic_tcp_sock_addr addr_sock_dest;
+
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
  */
-int mic_tcp_socket(start_mode sm)
-{
-   int result = -1;
-   printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
-   result = initialize_components(sm); /* Appel obligatoire */
-   set_loss_rate(0);
+int mic_tcp_socket(start_mode sm){
+  printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 
-   return result;
+  if(initialize_components(sm)!=-1){ /* Appel obligatoire */
+    /* 
+     * if sm == SERVEUR
+     *    1 - Creation du socket local + bind 
+     *    2 - adressage du socket --> construction de l'@
+     *                            '--> association @ et socket via BIND
+     * if sm == CLIENT
+     *    1 - creation socket local
+     *    2 - construction de l'@ local
+     *    3 - construction @ à atteindre
+     */
+
+    mysock.fd = 0; // identificateur du socket
+    mysock.state = IDLE; // etat du socket
+    return mysock.fd;
+  }
+  else {
+    return -1 ;
+  }
 }
 
 /*
  * Permet d’attribuer une adresse à un socket.
  * Retourne 0 si succès, et -1 en cas d’échec
  */
-int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
-{
+int mic_tcp_bind(int socket, mic_tcp_sock_addr addr){
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
-   return -1;
+   if (mysock.fd==socket){ // Si le socket a été créé correctement
+    memcpy((char*)&mysock.addr, (char*)&addr, sizeof(mic_tcp_sock_addr)); // mysock.addr=addr --> on attribue l'adresse mise en paramètre au socket
+    return 0;
+  }
+  else{
+    return -1;
+  }
 }
 
 /*
@@ -32,7 +55,13 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
-    return -1;
+    if(mysock.fd == socket){ // Si le socket a bien été créé correctement
+        mysock.state = ESTABLISHED; // On met le socket dans l'état connecté
+        return 0;
+    }
+    else{
+        return -1;
+  }
 }
 
 /*
@@ -42,17 +71,52 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
-    return -1;
+    if(mysock.fd == socket){ // Si le socket a bien été créé correctement
+        mysock.state = ESTABLISHED; // On met le socket dans l'état connecté
+        addr_sock_dest = addr; // On attribue l'adresse mise en paramètre au socket distant (serveur)
+        return 0;
+    } 
+    else {
+        return -1;
+  }
 }
 
 /*
  * Permet de réclamer l’envoi d’une donnée applicative
  * Retourne la taille des données envoyées, et -1 en cas d'erreur
  */
-int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
-{
+int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
+    // int IP_send(mic_tcp_pdu pk, mic_tcp_sock_addr addr)
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-    return -1;
+    if(mysock.fd == mic_sock){ // Si le socket a bien été créé correctement 
+        // 1 - Construction du PDU
+        mic_tcp_pdu pdu;
+        mic_tcp_header header;
+        mic_tcp_payload payload;
+        
+        header.source_port = mysock.addr.port; /* numéro de port source */
+        header.dest_port = addr_sock_dest.port; /* numéro de port de destination */
+        header.seq_num = 0; /* numéro de séquence */
+        header.ack_num = 0; /* numéro d'acquittement */
+        header.syn = 0; /* flag SYN (valeur 1 si activé et 0 si non) */
+        header.ack = 0; /* flag ACK (valeur 1 si activé et 0 si non) */
+        header.fin = 0; /* flag FIN (valeur 1 si activé et 0 si non) */
+
+        payload.data = mesg;
+        payload.size = mesg_size;
+
+        pdu.header = header;
+        pdu.payload = payload;
+
+        // 2 - Envoyer le PDU à la couche IP
+        IP_send(pdu, addr_sock_dest);
+
+        // 3 - Attente d'un ACK (V2)
+        return 0;
+    }
+    else {
+        return -1;
+    }
 }
 
 /*
@@ -64,7 +128,15 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-    return -1;
+    if(mysock.fd == socket){ // Si le socket a bien été créé correctement
+        mic_tcp_payload payload;
+        payload.data = mesg;
+        payload.size = max_mesg_size;
+        
+        app_buffer_get(payload);
+        
+        process_received_PDU(addr_sock_dest);
+    }
 }
 
 /*
@@ -87,4 +159,6 @@ int mic_tcp_close (int socket)
 void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
+    // V1 pas de mise à jour des numéros de séquence et d'acquittement
+    app_buffer_put(pdu.payload); // insertion des données utiles dans le buffer de réception du socket
 }
