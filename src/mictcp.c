@@ -88,12 +88,13 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
     // int IP_send(mic_tcp_pdu pk, mic_tcp_sock_addr addr)
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-    if(mysock.fd == mic_sock){ // Si le socket a bien été créé correctement 
+    if(mysock.fd == mic_sock && mysock.state == ESTABLISHED){ // Si le socket a bien été créé correctement 
         // 1 - Construction du PDU
         mic_tcp_pdu pdu;
         mic_tcp_header header;
         mic_tcp_payload payload;
-        
+
+        /* NOTE : on aurait pu juste utiliser pdu et donc faire par exemple --> pdu.header.source_port = ... */
         header.source_port = mysock.addr.port; /* numéro de port source */
         header.dest_port = addr_sock_dest.port; /* numéro de port de destination */
         header.seq_num = 0; /* numéro de séquence */
@@ -109,10 +110,10 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
         pdu.payload = payload;
 
         // 2 - Envoyer le PDU à la couche IP
-        IP_send(pdu, addr_sock_dest);
+        int octets_env = IP_send(pdu, addr_sock_dest);
 
         // 3 - Attente d'un ACK (V2)
-        return 0;
+        return octets_env;
     }
     else {
         return -1;
@@ -134,9 +135,6 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
   
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     if(mysock.fd == socket && mysock.state == ESTABLISHED){ // Si le socket a bien été créé correctement et que le sock est en état connecté
-
-      /* Attente d'un PDU */
-      mysock.state = WAIT_FOR_PDU;
 
       /* Recuperation d'un PDU dans le buffer de reception */
       nb_octets_lus = app_buffer_get(payload);
@@ -174,5 +172,5 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
     
     app_buffer_put(pdu.payload); // insertion des données utiles dans le buffer de réception du socket
 
-    mysock.state = ESTABLISHED;
+    //mysock.state = ESTABLISHED;
 }
