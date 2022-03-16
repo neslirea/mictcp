@@ -1,4 +1,4 @@
-XT#ifndef MICTCP_H
+#ifndef MICTCP_H
 #define MICTCP_H
 
 #include <stdio.h>
