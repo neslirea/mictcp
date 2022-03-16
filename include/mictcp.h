@@ -1,4 +1,4 @@
-#ifndef MICTCP_H
+XT#ifndef MICTCP_H
 #define MICTCP_H
 
 #include <stdio.h>
@@ -47,7 +47,7 @@ typedef struct mic_tcp_sock
 {
   int fd;  /* descripteur du socket */
   protocol_state state; /* état du protocole */
-  mic_tcp_sock_addr addr; /* adresse du socket */
+  mic_tcp_sock_addr; /* adresse du socket */
 } mic_tcp_sock;
 
 /*
