@@ -2,3 +2,8 @@
 
 V3.1 --> Cette version a une fenêtre égale à la longueur totale de la vidéo. 
 C'est-à-dire que nous incrémentons toujours le nombre de PDU envoyés et faisons le calcul sur ce nombre qui à la fin sera égale à la longueur totale de la vidéo.
+
+V3.2 --> Cette version a une fenêtre égale à une longueur que l'on initialiase (ici 50)
+C'est-à-dire que nous incrémentons toujours le nombre de PDU envoyés (et perdus) jusqu'à ce que le nombre de pdu envoyés atteigne 50.
+Une fois ce nombre atteint nous mettons les compteurs de PDU perdus et envoyés à 0 ce qui nous permet de faire des tests sur des tranches de 50 PDU.
+Cependant cette version n'est pas encore optimale. Il faudrait implémenter un système de fenêtre glissante (voir V3.3)
