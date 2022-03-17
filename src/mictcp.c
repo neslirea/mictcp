@@ -7,7 +7,9 @@ mic_tcp_sock_addr addr_sock_dest;
 int PA = 0; // prochain acquittement attendu
 int PE = 0; // prochaine emission attendue
 const int max_envoi = 10;
-const float pourcentage_perte = 10.0f;
+const float pourcentage_perte = 50.0f;
+int nb_pdu_env = 0;
+int nb_pdu_perdus = 0;
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -90,17 +92,13 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
  * Retourne la taille des données envoyées, et -1 en cas d'erreur
  */
 int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
-    int nb_pdu_env = 0;
-    int nb_pdu_perdus = 0;
     int ack_recu = 0;
     mic_tcp_pdu pdu;
     mic_tcp_pdu ack;
     unsigned long timeout = 100; //100 ms
     
-    printf("OW"); 
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     if(mysock.fd == mic_sock && mysock.state == ESTABLISHED){ // Si le socket a bien été créé correctement 
-        printf("OEJDD");
         // 1 - Construction du PDU à émettre
         pdu.header.source_port = mysock.addr.port; /* numéro de port source */
         pdu.header.dest_port = addr_sock_dest.port; /* numéro de port de destination */
@@ -108,6 +106,8 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
         pdu.header.syn = 0; /* flag SYN (valeur 1 si activé et 0 si non) */
         pdu.header.ack = 0; /* flag ACK (valeur 1 si activé et 0 si non) */
         pdu.header.fin = 0; /* flag FIN (valeur 1 si activé et 0 si non) */
+
+        PE = (PE+1)%2; // Mise à jour de PE
 
         pdu.payload.data = mesg;
         pdu.payload.size = mesg_size;
@@ -122,8 +122,6 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
         // Construction ACK
         ack.payload.size = 0;
 
-        printf("AVANT ACK RECU");
-
         while(ack_recu == 0){ // Tant qu'on n'a pas reçu d'ACK
           // SI l'ACK que l'on reçoit -->   n'a pas timeout   --ET--   est bien un ACK   --ET--   ACK.ack = PE
           if((IP_recv(&ack, &addr_sock_dest, timeout) != -1) && (ack.header.ack == 1) && (ack.header.ack_num == PE)){
@@ -131,19 +129,20 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
              * Si l'ACK reçu respecte toutes ces conditions on dit qu'on a reçu le bon ACK et que donc nous pouvons sortir du while
              * afin d'envoyer la prochaine trame à émettre (s'il y en a une)
              */
-            printf("ACK BIEN RECU\n");
+            //printf("ACK BIEN RECU\n");
             ack_recu = 1;
-            PE = (PE+1)%2; // Mise à jour de PE
             mysock.state = ESTABLISHED;
           }
           else{ // SINON --> On renvoie le PDU tout en imposant une limite maximale d'envoi pour le même PDU
             nb_pdu_perdus ++;
             if(nb_pdu_perdus > (pourcentage_perte/100)*(nb_pdu_env)){
+              printf("---------- REPRISE DE LA PERTE ------------ \n");
               octets_env = IP_send(pdu, addr_sock_dest);
               nb_pdu_env++;
             } 
             else{
-              return octets_env;
+              ack_recu = 1;
+              mysock.state = ESTABLISHED;
             }
           } 
         }
