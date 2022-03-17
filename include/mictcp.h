@@ -21,7 +21,7 @@
  */
 typedef enum protocol_state
 {
-    IDLE, CLOSED, SYN_SENT, SYN_RECEIVED, ESTABLISHED, CLOSING
+    IDLE, CLOSED, SYN_SENT, SYN_RECEIVED, ESTABLISHED, CLOSING, WAIT_FOR_ACK
 } protocol_state;
 
 /*
@@ -47,7 +47,7 @@ typedef struct mic_tcp_sock
 {
   int fd;  /* descripteur du socket */
   protocol_state state; /* état du protocole */
-  mic_tcp_sock_addr; /* adresse du socket */
+  mic_tcp_sock_addr addr; /* adresse du socket */
 } mic_tcp_sock;
 
 /*

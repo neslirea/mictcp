@@ -4,6 +4,9 @@
 /* Variables globales */
 mic_tcp_sock mysock;
 mic_tcp_sock_addr addr_sock_dest;
+int PA = 0; // prochain acquittement attendu
+int PE = 0; // prochaine emission attendue
+const int max_envoi = 10;
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -86,37 +89,64 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
  * Retourne la taille des données envoyées, et -1 en cas d'erreur
  */
 int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
-    // int IP_send(mic_tcp_pdu pk, mic_tcp_sock_addr addr)
+    int nb_pdu_env = 0;
+    int ack_recu = 0;
+    mic_tcp_pdu pdu;
+    mic_tcp_pdu ack;
+    unsigned long timeout = 100; //100 ms
+
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     if(mysock.fd == mic_sock && mysock.state == ESTABLISHED){ // Si le socket a bien été créé correctement 
-        // 1 - Construction du PDU
-        mic_tcp_pdu pdu;
-        mic_tcp_header header;
-        mic_tcp_payload payload;
+        // 1 - Construction du PDU à émettre
+        pdu.header.source_port = mysock.addr.port; /* numéro de port source */
+        pdu.header.dest_port = addr_sock_dest.port; /* numéro de port de destination */
+        pdu.header.seq_num = PE; /* numéro de séquence */ 
+        pdu.header.syn = 0; /* flag SYN (valeur 1 si activé et 0 si non) */
+        pdu.header.ack = 0; /* flag ACK (valeur 1 si activé et 0 si non) */
+        pdu.header.fin = 0; /* flag FIN (valeur 1 si activé et 0 si non) */
 
-        /* NOTE : on aurait pu juste utiliser pdu et donc faire par exemple --> pdu.header.source_port = ... */
-        header.source_port = mysock.addr.port; /* numéro de port source */
-        header.dest_port = addr_sock_dest.port; /* numéro de port de destination */
-        header.seq_num = 0; /* numéro de séquence */
-        header.ack_num = 0; /* numéro d'acquittement */
-        header.syn = 0; /* flag SYN (valeur 1 si activé et 0 si non) */
-        header.ack = 0; /* flag ACK (valeur 1 si activé et 0 si non) */
-        header.fin = 0; /* flag FIN (valeur 1 si activé et 0 si non) */
+        pdu.payload.data = mesg;
+        pdu.payload.size = mesg_size;
 
-        payload.data = mesg;
-        payload.size = mesg_size;
+        PE = (PE+1)%2; // Mise à jour de PE
 
-        pdu.header = header;
-        pdu.payload = payload;
-
-        // 2 - Envoyer le PDU à la couche IP
+        // 2 - Envoi du PDU à la couche IP
         int octets_env = IP_send(pdu, addr_sock_dest);
+        nb_pdu_env++;
 
-        // 3 - Attente d'un ACK (V2)
+        // 3 - Attente d'un ACK
+        mysock.state = WAIT_FOR_ACK;
+
+        // Construction ACK
+        ack.payload.size = 2*sizeof(short) + 2*sizeof(int) + 3*sizeof(char);
+        ack.payload.data = malloc(ack.payload.size);
+
+        while(ack_recu == 0){ // Tant qu'on n'a pas reçu d'ACK
+          printf("TEEEEEEEEST\n");
+          // SI l'ACK que l'on reçoit -->   n'a pas timeout   --ET--   est bien un ACK   --ET--   ACK.ack = PE
+          if((IP_recv(&ack, &addr_sock_dest, timeout) != -1) && (ack.header.ack == 1) && (ack.header.ack_num == PE)){
+            /* 
+             * Si l'ACK reçu respecte toutes ces conditions on dit qu'on a reçu le bon ACK et que donc nous pouvons sortir du while
+             * afin d'envoyer la prochaine trame à émettre (s'il y en a une)
+             */
+            printf("ACK BIEN RECU\n");
+            ack_recu = 1;
+          }
+          else{ // SINON --> On renvoie le PDU tout en imposant une limite maximale d'envoi pour le même PDU
+            if(nb_pdu_env < max_envoi){
+              octets_env = IP_send(pdu, addr_sock_dest);
+              nb_pdu_env++;
+            } 
+            else{
+              printf("ERREUR --> Limite d'envoi du même PDU dépassée !");
+              exit(EXIT_FAILURE);
+            }  
+          } 
+        }
         return octets_env;
     }
-    else {
-        return -1;
+    else{
+      return -1;
     }
 }
 
@@ -129,23 +159,20 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
 int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
 {
     int nb_octets_lus;
-    mic_tcp_payload payload; // creation contenu de pdu
-    payload.data = mesg;
-    payload.size = max_mesg_size;
+    mic_tcp_payload pdu; // creation contenu de pdu
+    pdu.data = mesg;
+    pdu.size = max_mesg_size;
   
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     if(mysock.fd == socket && mysock.state == ESTABLISHED){ // Si le socket a bien été créé correctement et que le sock est en état connecté
-
       /* Recuperation d'un PDU dans le buffer de reception */
-      nb_octets_lus = app_buffer_get(payload);
-
+      nb_octets_lus = app_buffer_get(pdu);
+      
       mysock.state = ESTABLISHED;
+      
       return nb_octets_lus;  
     }
-
-    else{
-      return -1;
-    }
+    return -1;
 }
 
 /*
@@ -167,10 +194,27 @@ int mic_tcp_close (int socket)
  */
 void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
 {
-    printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-    // V1 pas de mise à jour des numéros de séquence et d'acquittement
-    
-    app_buffer_put(pdu.payload); // insertion des données utiles dans le buffer de réception du socket
+  mic_tcp_pdu ack; // Création de l'ACK
 
-    //mysock.state = ESTABLISHED;
+  printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
+
+  if (pdu.header.seq_num == PA) { // DT.n°seq == PA
+    app_buffer_put(pdu.payload); // Ajout de la charge utile du PDU recu dans le buffer de reception 
+    PA = (PA + 1) % 2; // Mise à jour de PA
+  }
+    // sinon --> DT.n°seq != PA --> rejet de la DT DONC PA n'est pas mise à jour
+
+    // Construction de l'ACK
+    ack.header.source_port = mysock.addr.port;
+    ack.header.dest_port = addr.port;
+    ack.header.ack_num = PA;
+    ack.header.syn = 0;
+    ack.header.ack = 1;
+    ack.header.fin = 0;
+
+    ack.payload.size = 0; // on n'envoie pas de donnée
+
+    // Envoi de l'ACK à l'émetteur
+    IP_send(ack, addr);
 }
+ 
