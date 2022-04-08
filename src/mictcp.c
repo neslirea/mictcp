@@ -8,8 +8,6 @@ int PA = 0; // prochain acquittement attendu
 int PE = 0; // prochaine emission attendue
 const int max_envoi = 10;
 const float pourcentage_perte = 10.0f;
-int nb_pdu_env = 0;
-int nb_pdu_perdus = 0;
 
 // fenetre glissante
 const int taille_fenetre = 20;
