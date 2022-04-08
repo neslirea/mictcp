@@ -13,7 +13,7 @@ int initialized = -1;
 int sys_socket;
 pthread_t listen_th;
 pthread_mutex_t lock;
-unsigned short  loss_rate = 20;
+unsigned short  loss_rate =2;
 struct sockaddr_in remote_addr;
 
 /* This is for the buffer */
