@@ -133,7 +133,6 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
 
         // 2 - Envoi du PDU à la couche IP
         int octets_env = IP_send(pdu, addr_sock_dest);
-        nb_pdu_env++;
 
         // 3 - Attente d'un ACK
         mysock.state = WAIT_FOR_ACK;
