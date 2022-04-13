@@ -1,5 +1,6 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
+#include <pthread.h> // librairie pour les variables de threadss
 
 /* Variables globales */
 mic_tcp_sock mysock;
@@ -8,14 +9,19 @@ int PA = 0; // prochain acquittement attendu
 int PE = 0; // prochaine emission attendue
 const int max_envoi = 10;
 const float pourcentage_perte = 10.0f;
+unsigned long timeout = 100; //100 ms
 
-// fenetre glissante
+/* Fenêtre glissante */
 const int taille_fenetre = 20;
 short *tab;
 int courant;
 
 int nb_perdus();
 float pourcentage_perte_actuel();
+
+/* Mutex et variable de condition */
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -70,12 +76,45 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr){
  * Met le socket en état d'acceptation de connexions
  * Retourne 0 si succès, -1 si erreur
  */
-int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
-{
+int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr){
+  /* Ici nous nous plaçons du côté du serveur qui va accepter la primitive connect() 
+   * et donc attendre une initialisation de la phase de connexion de la part du client avec un SYN.
+   * Le serveur enverra alors un SYN ACK et se mettra en état d'attente d'un ACK pour finaliser la phase d'établissement du connexion
+   */
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
-    if(mysock.fd == socket){ // Si le socket a bien été créé correctement
-        mysock.state = ESTABLISHED; // On met le socket dans l'état connecté
-        return 0;
+    if(mysock.fd == socket){ // Si le socket a bien été créé correct
+      printf("ATTENTE DE RECEPTION SYN \n");
+      /* Attente de réception du PDU SYN de la part du client */
+      pthread_mutex_lock(&mutex);
+      pthread_cond_wait(&cond,&mutex); // attente de réception d'un signal pour se réveiller     
+      pthread_mutex_unlock(&mutex);
+
+      printf("RECEPTION DU SYN\n");
+
+      /* Création du SYN ACK */
+      mic_tcp_pdu SYN_ACK; 
+
+      /* Construction du SYN ACK */
+      SYN_ACK.header.source_port = mysock.addr.port;
+      SYN_ACK.header.dest_port = addr->port;
+      SYN_ACK.header.syn = 1;
+      SYN_ACK.header.ack = 1;
+      SYN_ACK.payload.size = 0; // on n'envoie pas de donnée    
+
+      /* Envoi du PDU SYN ACK */
+      IP_send(SYN_ACK, *addr); 
+
+      printf("ENVOI DU SYN ACK ET ATTENTE DU SYN\n");
+
+      /* Attente de réception du PDU ACK de la part du client */
+      pthread_mutex_lock(&mutex);
+      pthread_cond_wait(&cond,&mutex); // attente de réception d'un signal pour se réveiller     
+      pthread_mutex_unlock(&mutex);
+
+      printf("------ PHASE DE CONNEXION TERMINEE ------\n");
+
+      mysock.state = ESTABLISHED; // On met le socket dans l'état connecté
+      return 0;
     }
     else{
         return -1;
@@ -86,17 +125,64 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
  * Permet de réclamer l’établissement d’une connexion
  * Retourne 0 si la connexion est établie, et -1 en cas d’échec
  */
-int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
-{
+int mic_tcp_connect(int socket, mic_tcp_sock_addr addr){
+    int ack_recu = 0;
+    mic_tcp_pdu ack;
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     if(mysock.fd == socket){ // Si le socket a bien été créé correctement
-        mysock.state = ESTABLISHED; // On met le socket dans l'état connecté
-        addr_sock_dest = addr; // On attribue l'adresse mise en paramètre au socket distant (serveur)
-        return 0;
-    } 
+    printf("------ INITIALISATION DE LA PHASE DE CONNEXION ------\n");
+      /* Construction du SYN */
+      mic_tcp_pdu SYN;
+      SYN.header.syn = 1;
+      SYN.header.source_port = mysock.addr.port; /* numéro de port source */
+      SYN.header.dest_port = addr_sock_dest.port; /* numéro de port destination */
+      SYN.payload.size = 0; // on n'envoie pas de donnée
+
+      /* Envoi du PDU SYN */
+      if(IP_send(SYN, addr) == -1){
+        printf("ERREUR IP_send du SYN\n");
+        exit(EXIT_FAILURE); 
+      } 
+      printf("ENVOI DU SYN\n");
+
+      /* Attente de réception d'un ACK de la part du serveur */
+      while(ack_recu == 0){ // Tant qu'on n'a pas reçu d'ACK
+        printf("ATTENTE ACK\n");
+        // SI l'ACK que l'on reçoit -->   n'a pas timeout   --ET--   est bien un ACK
+        if((IP_recv(&ack, &addr_sock_dest, timeout) != -1) && (ack.header.ack == 1)){
+          
+          /* 
+           * Si l'ACK reçu respecte toutes ces conditions on dit qu'on a reçu le bon ACK et que donc nous pouvons sortir du while
+           * afin d'envoyer la prochaine trame à émettre (s'il y en a une)
+           */
+          ack_recu = 1;
+          printf("RECEPTION DU SYN ACK\n");
+        }
+        /*else{
+          printf("RENVOI DU PDU SYN \n");
+          IP_send(SYN, addr); 
+        }*/
+      } 
+      /* Construction du ACK */
+      mic_tcp_pdu ACK;
+      ACK.header.ack = 1;
+      ACK.header.source_port = mysock.addr.port; /* numéro de port source */
+      ACK.header.dest_port = addr_sock_dest.port; /* numéro de port destination */
+      ACK.header.ack_num = -1; /* valeur pour vérifier dans le receive que c'est bien l'ACK de l'etablissement de la connexion*/
+      ACK.payload.size = 0; // on n'envoie pas de donnée
+      /* Envoi du PDU ACK */
+      if(IP_send(ACK, addr) == -1){
+        printf("ERREUR IP_send de l'ACK\n");
+        exit(EXIT_FAILURE); 
+      } 
+
+      mysock.state = ESTABLISHED; // On met le socket dans l'état connecté
+      addr_sock_dest = addr; // On attribue l'adresse mise en paramètre au socket distant (serveur)
+      return 0;
+    }
     else {
-        return -1;
-  }
+      return -1;
+    }
 }
 
 /*
@@ -107,7 +193,6 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
     int ack_recu = 0;
     mic_tcp_pdu pdu;
     mic_tcp_pdu ack;
-    unsigned long timeout = 100; //100 ms
     
     //printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     if(mysock.fd == mic_sock && mysock.state == ESTABLISHED){ // Si le socket a bien été créé correctement 
@@ -124,16 +209,8 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
         pdu.payload.data = mesg;
         pdu.payload.size = mesg_size;
 
-        // v3.2
-        /*
-        if(nb_pdu_env == 50){
-          nb_pdu_env = 0;
-          nb_pdu_perdus = 0;
-        }*/
-
         // 2 - Envoi du PDU à la couche IP
         int octets_env = IP_send(pdu, addr_sock_dest);
-        nb_pdu_env++;
 
         // 3 - Attente d'un ACK
         mysock.state = WAIT_FOR_ACK;
@@ -222,16 +299,27 @@ int mic_tcp_close (int socket)
  * le buffer de réception du socket. Cette fonction utilise la fonction
  * app_buffer_put().
  */
-void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
-{
+void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr){
   mic_tcp_pdu ack; // Création de l'ACK
 
   //printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-
-  if (pdu.header.seq_num == PA) { // DT.n°seq == PA
-    app_buffer_put(pdu.payload); // Ajout de la charge utile du PDU recu dans le buffer de reception 
-    PA = (PA + 1) % 2; // Mise à jour de PA
+  
+  /* POUR LA PHASE D'ETABLISSEMENT DE CONNEXION */
+  if(pdu.header.syn == 1){
+    /* Envoi du signal pour réveiller le serveur afin qu'il puisse envoyer le PDU SYN ACK */
+    pthread_cond_signal(&cond); 
   }
+
+  else if(pdu.header.ack == 1 && pdu.header.ack_num == -1){
+    /* Envoi du signal pour réveiller le serveur afin qu'il dise que l'etablissement de la connexion s'est bien déroulé */
+    pthread_cond_signal(&cond); 
+  }
+
+  else{
+    if (pdu.header.seq_num == PA) { // DT.n°seq == PA
+      app_buffer_put(pdu.payload); // Ajout de la charge utile du PDsynU recu dans le buffer de reception 
+      PA = (PA + 1) % 2; // Mise à jour de PA
+    }
     // sinon --> DT.n°seq != PA --> rejet de la DT DONC PA n'est pas mise à jour
 
     // Construction de l'ACK
@@ -246,6 +334,7 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
 
     // Envoi de l'ACK à l'émetteur
     IP_send(ack, addr);
+  }
 }
 
 int nb_perdus(){
