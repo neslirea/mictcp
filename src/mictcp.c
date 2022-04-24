@@ -7,8 +7,11 @@ mic_tcp_sock mysock;
 mic_tcp_sock_addr addr_sock_dest;
 int PA = 0; // prochain acquittement attendu
 int PE = 0; // prochaine emission attendue
-const int max_envoi = 10;
-const float pourcentage_perte = 10.0f;
+
+/* Varialbes liées aux pertes */
+const int max_envoi = 10; // nb envoi max avant abandon
+int pourcentage_perte = 0; // perte acceptee pour le Stop & Wait (valeur donnée statiquement lors de la création du socket)
+int perte_admissible; // valeur de perte tolérée à la fin de la négociation
 unsigned long timeout = 100; //100 ms
 
 /* Fenêtre glissante */
@@ -34,6 +37,20 @@ int mic_tcp_socket(start_mode sm){
   courant = 0;
   for (int i=0; i<taille_fenetre;i++){
       tab[i]=0;
+  }
+
+  /* Pourcentage de pertes sur le reseau */
+  set_loss_rate(5);
+
+  /* Client */
+  if (sm == CLIENT) {
+    pourcentage_perte=20;
+    printf("Pourcentage de perte admissible côté client : %d %%\n", pourcentage_perte);
+  }
+  /* Serveur */
+  else {
+    pourcentage_perte=10;
+    printf("Pourcentage de perte admissible côté serveur : %d %%\n", pourcentage_perte);
   }
 
   if(initialize_components(sm)!=-1){ /* Appel obligatoire */
@@ -84,10 +101,17 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr){
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     if(mysock.fd == socket){ // Si le socket a bien été créé correct
       printf("ATTENTE DE RECEPTION SYN \n");
+
+      mysock.state = WAIT_FOR_SYN; // Mise en état d'attente de réception d'un PDU SYN
+
       /* Attente de réception du PDU SYN de la part du client */
-      pthread_mutex_lock(&mutex);
+      if(pthread_mutex_lock(&mutex) != 0){
+        printf("Erreur mutex lock");
+      } 
       pthread_cond_wait(&cond,&mutex); // attente de réception d'un signal pour se réveiller     
-      pthread_mutex_unlock(&mutex);
+      if(pthread_mutex_unlock(&mutex) != 0){
+        printf("Erreur mutex unlock");
+      }
 
       printf("RECEPTION DU SYN\n");
 
@@ -99,17 +123,27 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr){
       SYN_ACK.header.dest_port = addr->port;
       SYN_ACK.header.syn = 1;
       SYN_ACK.header.ack = 1;
+      SYN_ACK.header.ack_num = pourcentage_perte; // Le serveur envoie le pourcentage de perte qu'il tolère au maximum
       SYN_ACK.payload.size = 0; // on n'envoie pas de donnée    
 
       /* Envoi du PDU SYN ACK */
       IP_send(SYN_ACK, *addr); 
 
-      printf("ENVOI DU SYN ACK ET ATTENTE DU SYN\n");
+      printf("ENVOI DU SYN ACK ET ATTENTE DE L'ACK\n");
+      mysock.state = WAIT_FOR_ACK; // Mise en état d'attente de réception d'un PDU ACK   
 
       /* Attente de réception du PDU ACK de la part du client */
-      pthread_mutex_lock(&mutex);
+      if(pthread_mutex_lock(&mutex) != 0){
+        printf("Erreur mutex lock");
+      } 
       pthread_cond_wait(&cond,&mutex); // attente de réception d'un signal pour se réveiller     
-      pthread_mutex_unlock(&mutex);
+      if(pthread_mutex_unlock(&mutex) != 0){
+        printf("Erreur mutex unlock");
+      }
+
+      printf("ACK RECU\n");
+
+      printf("Negociation du taux de perte admissible : %d %%\n", perte_admissible);
 
       printf("------ PHASE DE CONNEXION TERMINEE ------\n");
 
@@ -126,11 +160,15 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr){
  * Retourne 0 si la connexion est établie, et -1 en cas d’échec
  */
 int mic_tcp_connect(int socket, mic_tcp_sock_addr addr){
-    int ack_recu = 0;
-    mic_tcp_pdu ack;
+    mic_tcp_pdu SYNACK;
+    int synack_recu = 0;
+    /* mic_tcp_connect est utilisée par le client donc pourcentage_perte correspondra ici au pourcentage toléré par le client */
+    int pourcentage_perte_client = pourcentage_perte;
+    int pourcentage_perte_serveur = 0;
+    
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     if(mysock.fd == socket){ // Si le socket a bien été créé correctement
-    printf("------ INITIALISATION DE LA PHASE DE CONNEXION ------\n");
+    printf("------ INITIALISATION DE LA PHASE D'ETABLISSEMENT DE CONNEXION ------\n");
       /* Construction du SYN */
       mic_tcp_pdu SYN;
       SYN.header.syn = 1;
@@ -143,32 +181,43 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr){
         printf("ERREUR IP_send du SYN\n");
         exit(EXIT_FAILURE); 
       } 
-      printf("ENVOI DU SYN\n");
 
-      /* Attente de réception d'un ACK de la part du serveur */
-      while(ack_recu == 0){ // Tant qu'on n'a pas reçu d'ACK
-        printf("ATTENTE ACK\n");
-        // SI l'ACK que l'on reçoit -->   n'a pas timeout   --ET--   est bien un ACK
-        if((IP_recv(&ack, &addr_sock_dest, timeout) != -1) && (ack.header.ack == 1)){
-          
-          /* 
-           * Si l'ACK reçu respecte toutes ces conditions on dit qu'on a reçu le bon ACK et que donc nous pouvons sortir du while
-           * afin d'envoyer la prochaine trame à émettre (s'il y en a une)
-           */
-          ack_recu = 1;
+      printf("ENVOI DU SYN ET ATTENTE DU SYN ACK");
+      mysock.state = WAIT_FOR_SYN_ACK; // Mise en état d'attente de réception d'un PDU SYN ACK
+
+      /* Attente de réception du SYN ACK de la part du serveur */
+      while(synack_recu == 0){ // Tant qu'on n'a pas reçu le SYN ACK
+        // SI le SYN ACK que l'on reçoit -->   n'a pas timeout   --ET--   est bien le SYN ACK attendu
+        if((IP_recv(&SYNACK, &addr_sock_dest, timeout) != -1) && (SYNACK.header.ack == 1) && (SYNACK.header.syn == 1)){
+          /* Si le PDU reçu respecte toutes ces conditions nous pouvons sortir du while */
+          synack_recu = 1;
+          pourcentage_perte_serveur = SYNACK.header.ack_num;
           printf("RECEPTION DU SYN ACK\n");
         }
-        /*else{
-          printf("RENVOI DU PDU SYN \n");
+        else{
+          // timeout expiré
+          printf("TIMEOUT DU PDU SYN --> REEMISSION DU PDU SYN\n");
           IP_send(SYN, addr); 
-        }*/
+        }
       } 
-      /* Construction du ACK */
+  
+      /* Negociation du pourcentage de pertes admissibles entre le client et le serveur */
+      /* On garde le pourcentage le plus faible */
+      if(pourcentage_perte_serveur > pourcentage_perte_client) {
+        perte_admissible = pourcentage_perte_client; 
+      } 
+      else {
+          perte_admissible = pourcentage_perte_serveur;
+      }
+      printf("Negociation du taux de perte admissible : %d %%\n", perte_admissible);
+
+      /* Construction du PDU ACK */
       mic_tcp_pdu ACK;
       ACK.header.ack = 1;
-      ACK.header.source_port = mysock.addr.port; /* numéro de port source */
-      ACK.header.dest_port = addr_sock_dest.port; /* numéro de port destination */
-      ACK.header.ack_num = -1; /* valeur pour vérifier dans le receive que c'est bien l'ACK de l'etablissement de la connexion*/
+      ACK.header.source_port = mysock.addr.port; // numéro de port source
+      ACK.header.dest_port = addr_sock_dest.port; // numéro de port destination
+      ACK.header.seq_num = perte_admissible; // Le client envoie au serveur la perte admissible finale
+      ACK.header.ack_num = -1; // valeur pour vérifier dans le receive que c'est bien l'ACK de l'etablissement de la connexion
       ACK.payload.size = 0; // on n'envoie pas de donnée
       /* Envoi du PDU ACK */
       if(IP_send(ACK, addr) == -1){
@@ -226,7 +275,6 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size){
              * Si l'ACK reçu respecte toutes ces conditions on dit qu'on a reçu le bon ACK et que donc nous pouvons sortir du while
              * afin d'envoyer la prochaine trame à émettre (s'il y en a une)
              */
-            //printf("ACK BIEN RECU\n");
             ack_recu = 1;
             //on update la fenêtre
             tab[courant]=1;
@@ -305,14 +353,19 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr){
   //printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
   
   /* POUR LA PHASE D'ETABLISSEMENT DE CONNEXION */
-  if(pdu.header.syn == 1){
+  if(mysock.state == WAIT_FOR_SYN){ // Si le serveur est en état d'attente d'un PDU SYN
     /* Envoi du signal pour réveiller le serveur afin qu'il puisse envoyer le PDU SYN ACK */
-    pthread_cond_signal(&cond); 
+    if (pthread_cond_signal(&cond) != 0) {
+			printf("Erreur: pthread_cond_signal\n");
+			}
   }
 
-  else if(pdu.header.ack == 1 && pdu.header.ack_num == -1){
+  else if(mysock.state == WAIT_FOR_ACK){ // Si le serveur est en état d'attente d'un ACK
     /* Envoi du signal pour réveiller le serveur afin qu'il dise que l'etablissement de la connexion s'est bien déroulé */
-    pthread_cond_signal(&cond); 
+    perte_admissible = pdu.header.seq_num; // le serveur prend en compte la perte admissible finale
+    if (pthread_cond_signal(&cond) != 0) {
+			printf("Erreur: pthread_cond_signal\n");
+			}
   }
 
   else{
