@@ -16,3 +16,24 @@ A chaque fois qu'on devrait réemettre un pdu, on regarde si le pourcentage de b
 V4.1 --> Cette version contient la phase d'établissement de la connexion ainsi que sa fermeture, mais aussi la phase de négociation du pourcentage de perte admissible
 
 V4.2 --> Cette version contient une gestion de l'asynchronisme.
+
+### Commande pour compiler :
+make
+
+### Commandes pour tester MICTCP avec tsock_texte :
+./tsock_texte -p
+./tsock_texte -s
+
+### Commandes pour tester MICTCP avec tsock_video :
+./tsock_video -p -t mictcp
+./tsock_video -s -t mictcp
+
+
+### Commentaire (pour v4.1 et +) :
+
+- Négociation :
+	- pourcentage de pertes admissibles proposé par le client : 20%
+	- pourcentage de pertes admissibles proposé par le serveur : 10%
+	=> pourcentage de pertes admissibles retenu après négociation : 10%
+
+- Pourcentage de pertes pour la simulation : 5%
