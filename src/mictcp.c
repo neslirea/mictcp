@@ -382,7 +382,6 @@ int mic_tcp_close (int socket)
 
       /* Construction du ACK */
       mic_tcp_pdu ACK;
-      ACK.header.fin = -1; // repère pour le serveur (pour qu'il sache que l'ACK reçu est celui de la fermeture de la connexion)
       ACK.header.ack = 1;
       ACK.header.source_port = mysock.addr.port; /* numéro de port source */
       ACK.header.dest_port = addr_sock_dest.port; /* numéro de port destination */
@@ -448,19 +447,8 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr){
     mysock.state == CLOSING;
   }
 
-  else if(mysock.state == CLOSING){ // Si le serveur est en état de fermeture de connexion et qu'il reçoit un paquet
-    /* Il envoie le PDU FIN */
-    // Construction du PDU ACK de fermeture de connexion
-    ack.header.source_port = mysock.addr.port;
-    ack.header.dest_port = addr.port;
-    
-    ack.header.ack = 1;
-
-    ack.payload.size = 0; // on n'envoie pas de donnée
-
-    // Envoi de l'ACK à l'émetteur
-    IP_send(ack, addr);
-
+  else if(mysock.state == CLOSING){ // Si le serveur est en état de fermeture de connexion et reçoit un paquet
+    /* Il se met en état fermé */
     mysock.state == CLOSED;
   }
 
