@@ -1,6 +1,7 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
-#include <pthread.h> // librairie pour les variables de threadss
+#include <pthread.h> // librairie pour les variables de threads
+ // librairie pour détruire socket
 
 /* Variables globales */
 mic_tcp_sock mysock;
@@ -337,7 +338,68 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
  */
 int mic_tcp_close (int socket)
 {
+    int finack_recu = 0;
+    int nb_env = 0;
     printf("[MIC-TCP] Appel de la fonction :  "); printf(__FUNCTION__); printf("\n");
+    if(mysock.fd == socket && mysock.state == ESTABLISHED){ // Si le socket a bien été créé correctement et que le sock est en état connecté
+      printf("------ INITIALISATION DE LA PHASE DE FERMETURE DE CONNEXION ------\n");
+      
+      /* Construction du FIN */
+      mic_tcp_pdu FIN;
+      FIN.header.fin = 1;
+      FIN.header.source_port = mysock.addr.port; /* numéro de port source */
+      FIN.header.dest_port = addr_sock_dest.port; /* numéro de port destination */
+      FIN.payload.size = 0; // on n'envoie pas de donnée
+
+      /* Envoi du PDU FIN */
+      if(IP_send(FIN, addr_sock_dest) == -1){
+        printf("ERREUR IP_send du FIN\n");
+        exit(EXIT_FAILURE); 
+      }
+      nb_env++;
+
+      mic_tcp_pdu finack;
+      while(finack_recu == 0){ // Tant que l'on n'a pas reçu de finack de la part du serveur
+        // SI l'ACK que l'on reçoit -->   n'a pas timeout   --ET--   est bien un ACK   --ET--   ACK.ack = PE
+        if((IP_recv(&finack, &addr_sock_dest, timeout) != -1) && (finack.header.ack == 1) && (finack.header.fin == 1)){
+          /* 
+            * Si le finack reçu respecte toutes ces conditions on dit qu'on a reçu le bon finack et que donc nous pouvons sortir du while
+            * afin d'envoyer la prochaine trame à émettre (s'il y en a une)
+            */
+          finack_recu = 1;
+        }
+        else{ // SINON --> On renvoie le PDU tout en imposant une limite maximale d'envoi pour le même PDU
+          if(nb_env<max_envoi){
+            printf("---------- REPRISE DE LA PERTE ------------ \n");
+            IP_send(FIN, addr_sock_dest);
+            nb_env++;
+          } 
+          else{              
+            finack_recu = 1;
+          } 
+        }
+      }
+
+      /* Construction du ACK */
+      mic_tcp_pdu ACK;
+      ACK.header.fin = -1; // repère pour le serveur (pour qu'il sache que l'ACK reçu est celui de la fermeture de la connexion)
+      ACK.header.ack = 1;
+      ACK.header.source_port = mysock.addr.port; /* numéro de port source */
+      ACK.header.dest_port = addr_sock_dest.port; /* numéro de port destination */
+      ACK.payload.size = 0; // on n'envoie pas de donnée
+
+      /* Envoi du PDU ACK */
+      if(IP_send(ACK, addr_sock_dest) == -1){
+        printf("ERREUR IP_send du FIN\n");
+        exit(EXIT_FAILURE); 
+      }
+
+      printf("----- FERMETURE DE LA CONNEXION TERMINEE ----- \n");
+      mysock.state == CLOSED;
+      close(socket); // destruction socket
+      return 0;
+    } 
+
     return -1;
 }
 
@@ -360,12 +422,46 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr){
 			}
   }
 
-  else if(mysock.state == WAIT_FOR_ACK){ // Si le serveur est en état d'attente d'un ACK
+  else if(mysock.state == WAIT_FOR_ACK){ // Si le serveur est en état d'attente d'un ACK --> le seul cas est celui de la phase d'établissement de connexion dans notre sujet
     /* Envoi du signal pour réveiller le serveur afin qu'il dise que l'etablissement de la connexion s'est bien déroulé */
     perte_admissible = pdu.header.seq_num; // le serveur prend en compte la perte admissible finale
     if (pthread_cond_signal(&cond) != 0) {
 			printf("Erreur: pthread_cond_signal\n");
 			}
+  }
+
+  else if(pdu.header.fin == 1){ // Si le serveur reçoit un pdu ayant le "fin" à 1
+    /* Il comprend que le client veut fermer la connexion et lui envoie alors un pdu "fin/ack" */
+    // Construction du PDU FIN/ACK
+    mic_tcp_pdu FINACK;
+    FINACK.header.source_port = mysock.addr.port;
+    FINACK.header.dest_port = addr.port;
+    
+    FINACK.header.fin = 1;
+    FINACK.header.ack = 1;
+
+    FINACK.payload.size = 0; // on n'envoie pas de donnée
+
+    // Envoi de l'ACK à l'émetteur
+    IP_send(FINACK, addr);
+
+    mysock.state == CLOSING;
+  }
+
+  else if(mysock.state == CLOSING){ // Si le serveur est en état de fermeture de connexion et qu'il reçoit un paquet
+    /* Il envoie le PDU FIN */
+    // Construction du PDU ACK de fermeture de connexion
+    ack.header.source_port = mysock.addr.port;
+    ack.header.dest_port = addr.port;
+    
+    ack.header.ack = 1;
+
+    ack.payload.size = 0; // on n'envoie pas de donnée
+
+    // Envoi de l'ACK à l'émetteur
+    IP_send(ack, addr);
+
+    mysock.state == CLOSED;
   }
 
   else{
