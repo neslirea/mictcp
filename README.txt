@@ -12,3 +12,7 @@ V3.3 --> Cette version a une fenêtre égale à une longueur que l'on initialias
 Nous avons un tableau de longeur n contenant des 0 et des 1. Il contient les états des n derniers pdu (reçu ou perte admissible).
 0 correspond à un pdu perdu, 1 à un pdu reçu.
 A chaque fois qu'on devrait réemettre un pdu, on regarde si le pourcentage de bit à 0 dans le tableau est acceptable.
+
+V4.1 --> Cette version contient la phase d'établissement de la connexion ainsi que sa fermeture, mais aussi la phase de négociation du pourcentage de perte admissible
+
+V4.2 --> Cette version contient une gestion de l'asynchronisme.
