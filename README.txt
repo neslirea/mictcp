@@ -14,7 +14,8 @@ Nous avons un tableau de longeur n contenant des 0 et des 1. Il contient les ét
 A chaque fois qu'on devrait réemettre un pdu, on regarde si le pourcentage de bit à 0 dans le tableau est acceptable.
 
 V4.1 --> Cette version contient la phase d'établissement de la connexion ainsi que sa fermeture, mais aussi la phase de négociation du pourcentage de perte admissible
-Le seul problème est que nous ne pouvons pas utiliser une boucle while pour renvoyer le paquet SYN/ACK 
+Le seul problème est que nous ne pouvons pas utiliser une boucle while pour renvoyer le paquet SYN/ACK étant donné que l'utilisation des mutex et des variables de condition nous en empêche.
+Il est donc possible que la phase de connexion ne se fasse pas correctement auquel il suffit juste de terminer et relancer le programme.
 
 V4.2 --> Cette version contient une gestion de l'asynchronisme.
 
